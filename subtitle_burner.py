@@ -3,8 +3,16 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+def check_ffmpeg():
+    """Checks if ffmpeg is installed."""
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        raise FileNotFoundError("ffmpeg is not installed. Please install it to use this feature.")
+
 def burn_subtitles_to_video(video_path, srt_path, output_dir, output_filename=None, 
                            font_size=24, font_color="white", position="bottom"):
+    check_ffmpeg()
     """
     Burn subtitles into video using FFmpeg
     
