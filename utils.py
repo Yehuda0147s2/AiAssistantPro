@@ -2,292 +2,256 @@ import os
 import tempfile
 import shutil
 import time
-from pathlib import Path
 import json
+import logging
+from pathlib import Path
+from typing import List, Dict, Any
 
-def create_temp_dir():
+# --- Configuration ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# --- File and Directory Management ---
+
+def create_temp_dir() -> str:
     """
-    Create a temporary directory for processing files
+    Creates a temporary directory for processing files.
     
     Returns:
-        str: Path to the temporary directory
+        str: The absolute path to the created temporary directory.
     """
     temp_dir = tempfile.mkdtemp(prefix="youngaivagent_")
+    logging.info(f"Created temporary directory: {temp_dir}")
     return temp_dir
 
-def cleanup_temp_files(temp_dirs):
+def cleanup_temp_files(temp_dirs: List[str]):
     """
-    Clean up temporary directories and files
+    Removes a list of temporary directories and their contents.
     
     Args:
-        temp_dirs (list): List of temporary directory paths to clean up
+        temp_dirs (List[str]): A list of directory paths to be removed.
     """
     for temp_dir in temp_dirs:
         try:
-            if os.path.exists(temp_dir):
+            if Path(temp_dir).exists() and Path(temp_dir).is_dir():
                 shutil.rmtree(temp_dir)
+                logging.info(f"Successfully cleaned up temporary directory: {temp_dir}")
         except Exception as e:
-            print(f"Warning: Could not clean up {temp_dir}: {e}")
+            logging.warning(f"Could not clean up temporary directory {temp_dir}: {e}")
 
-def format_time(seconds):
+def ensure_directory_exists(directory_path: str):
     """
-    Format seconds into human-readable time string
+    Ensures that a directory exists, creating it if necessary.
+
+    Args:
+        directory_path (str): The path to the directory.
+    """
+    Path(directory_path).mkdir(parents=True, exist_ok=True)
+
+# --- Data Formatting and Validation ---
+
+def format_time(seconds: float) -> str:
+    """
+    Formats a duration in seconds into a human-readable HH:MM:SS string.
     
     Args:
-        seconds (float): Time in seconds
+        seconds (float): The duration in seconds.
         
     Returns:
-        str: Formatted time string (HH:MM:SS)
+        str: The formatted time string (e.g., "01:05:22" or "15:30").
     """
-    if seconds < 0:
-        return "Invalid time"
+    if not isinstance(seconds, (int, float)) or seconds < 0:
+        return "00:00"
     
     hours = int(seconds // 3600)
     minutes = int((seconds % 3600) // 60)
     secs = int(seconds % 60)
     
-    if hours > 0:
-        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
-    else:
-        return f"{minutes:02d}:{secs:02d}"
+    return f"{hours:02d}:{minutes:02d}:{secs:02d}" if hours > 0 else f"{minutes:02d}:{secs:02d}"
 
-def get_file_size_mb(file_path):
+def get_file_size_mb(file_path: str) -> float:
     """
-    Get file size in megabytes
+    Gets the size of a file in megabytes.
     
     Args:
-        file_path (str): Path to the file
+        file_path (str): The path to the file.
         
     Returns:
-        float: File size in MB
+        float: The file size in MB, or 0.0 if the file doesn't exist.
     """
     try:
-        size_bytes = os.path.getsize(file_path)
-        return size_bytes / (1024 * 1024)
-    except OSError:
+        return Path(file_path).stat().st_size / (1024 * 1024)
+    except FileNotFoundError:
         return 0.0
 
-def validate_file_extension(filename, allowed_extensions):
+def validate_file_extension(filename: str, allowed_extensions: List[str]) -> bool:
     """
-    Validate if file has an allowed extension
+    Validates if a file has one of the allowed extensions.
     
     Args:
-        filename (str): Name of the file
-        allowed_extensions (list): List of allowed extensions (with dots)
+        filename (str): The name of the file.
+        allowed_extensions (List[str]): A list of allowed extensions (e.g., ['.mp4', '.mov']).
         
     Returns:
-        bool: True if extension is allowed, False otherwise
+        bool: True if the file extension is in the allowed list, False otherwise.
     """
-    file_ext = Path(filename).suffix.lower()
-    return file_ext in [ext.lower() for ext in allowed_extensions]
+    return Path(filename).suffix.lower() in [ext.lower() for ext in allowed_extensions]
 
-def ensure_directory_exists(directory_path):
+def safe_filename(filename: str) -> str:
     """
-    Ensure directory exists, create if it doesn't
+    Sanitizes a filename by removing or replacing characters that are invalid in most filesystems.
     
     Args:
-        directory_path (str): Path to the directory
-    """
-    os.makedirs(directory_path, exist_ok=True)
+        filename (str): The original filename.
 
-def safe_filename(filename):
-    """
-    Create a safe filename by removing/replacing problematic characters
-    
-    Args:
-        filename (str): Original filename
-        
     Returns:
-        str: Safe filename
+        str: A filesystem-safe filename.
     """
-    # Replace problematic characters
-    unsafe_chars = '<>:"/\\|?*'
-    safe_name = filename
-    
-    for char in unsafe_chars:
-        safe_name = safe_name.replace(char, '_')
-    
-    # Remove leading/trailing whitespace and dots
-    safe_name = safe_name.strip(' .')
-    
-    # Ensure filename is not empty
-    if not safe_name:
-        safe_name = f"file_{int(time.time())}"
-    
-    return safe_name
+    unsafe_chars = r'<>:"/\\|?*'
+    safe_name = "".join('_' if char in unsafe_chars else char for char in filename).strip()
+    return safe_name or f"file_{int(time.time())}"
 
-def read_text_file(file_path, encoding='utf-8'):
+# --- Language and Processing ---
+
+def get_available_languages() -> Dict[str, str]:
     """
-    Safely read a text file
-    
-    Args:
-        file_path (str): Path to the text file
-        encoding (str): File encoding (default: utf-8)
-        
+    Returns a dictionary of available languages for translation.
+
     Returns:
-        str: File content or empty string if error
-    """
-    try:
-        with open(file_path, 'r', encoding=encoding) as file:
-            return file.read()
-    except Exception as e:
-        print(f"Error reading file {file_path}: {e}")
-        return ""
-
-def write_text_file(content, file_path, encoding='utf-8'):
-    """
-    Safely write content to a text file
-    
-    Args:
-        content (str): Content to write
-        file_path (str): Path where to write the file
-        encoding (str): File encoding (default: utf-8)
-        
-    Returns:
-        bool: True if successful, False otherwise
-    """
-    try:
-        # Ensure directory exists
-        ensure_directory_exists(os.path.dirname(file_path))
-        
-        with open(file_path, 'w', encoding=encoding) as file:
-            file.write(content)
-        return True
-    except Exception as e:
-        print(f"Error writing file {file_path}: {e}")
-        return False
-
-def log_processing_step(message, log_file=None):
-    """
-    Log processing steps with timestamp
-    
-    Args:
-        message (str): Message to log
-        log_file (str): Optional log file path
-    """
-    timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-    log_message = f"[{timestamp}] {message}"
-    
-    print(log_message)
-    
-    if log_file:
-        try:
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(log_message + '\n')
-        except Exception as e:
-            print(f"Warning: Could not write to log file: {e}")
-
-def get_available_languages():
-    """
-    Get list of available translation languages
-    
-    Returns:
-        dict: Dictionary mapping language names to codes
+        Dict[str, str]: A dictionary mapping full language names to their two-letter codes.
     """
     return {
-        "Hebrew": "he",
-        "Spanish": "es", 
-        "French": "fr",
-        "German": "de",
-        "Italian": "it",
-        "Portuguese": "pt",
-        "Arabic": "ar",
-        "Russian": "ru",
-        "Chinese": "zh",
-        "Japanese": "ja",
-        "Korean": "ko",
-        "Dutch": "nl",
-        "Swedish": "sv",
-        "Norwegian": "no",
-        "Danish": "da"
+        "Arabic": "ar", "Chinese": "zh", "Danish": "da", "Dutch": "nl",
+        "French": "fr", "German": "de", "Hebrew": "he", "Italian": "it",
+        "Japanese": "ja", "Korean": "ko", "Norwegian": "no", "Portuguese": "pt",
+        "Russian": "ru", "Spanish": "es", "Swedish": "sv"
     }
 
-def estimate_processing_time(video_duration_seconds, num_languages=1):
+def estimate_processing_time(video_duration_seconds: float, num_languages: int = 1) -> Dict[str, Any]:
     """
-    Estimate total processing time based on video duration and number of languages
+    Estimates the total processing time based on video duration and number of languages.
     
     Args:
-        video_duration_seconds (float): Video duration in seconds
-        num_languages (int): Number of target languages
+        video_duration_seconds (float): The video's duration in seconds.
+        num_languages (int, optional): The number of target languages for translation. Defaults to 1.
         
     Returns:
-        dict: Estimated times for each step
+        Dict[str, Any]: A dictionary with estimated times for each step and a formatted total.
     """
-    # Rough estimates based on typical processing times
-    transcription_time = video_duration_seconds * 0.1  # ~10% of video length
-    translation_time_per_lang = video_duration_seconds * 0.05  # ~5% per language
-    burning_time_per_lang = video_duration_seconds * 0.3  # ~30% per language
+    if video_duration_seconds <= 0:
+        return {'transcription': 0, 'translation': 0, 'burning': 0, 'total': 0, 'formatted_total': '00:00'}
+
+    # Rough estimates (can be fine-tuned)
+    transcription_time = video_duration_seconds * 0.1  # 10% of video length
+    translation_time = video_duration_seconds * 0.05 * num_languages
+    burning_time = video_duration_seconds * 0.3 * (num_languages + 1) # +1 for English
     
-    total_translation_time = translation_time_per_lang * num_languages
-    total_burning_time = burning_time_per_lang * num_languages
-    
-    total_time = transcription_time + total_translation_time + total_burning_time
+    total_time = transcription_time + translation_time + burning_time
     
     return {
         'transcription': transcription_time,
-        'translation': total_translation_time,
-        'burning': total_burning_time,
+        'translation': translation_time,
+        'burning': burning_time,
         'total': total_time,
         'formatted_total': format_time(total_time)
     }
 
-def create_processing_summary(video_path, target_languages, output_files):
+# --- Data I/O and Summarization ---
+
+def read_text_file(file_path: str, encoding: str = 'utf-8') -> str:
     """
-    Create a summary of the processing results
+    Safely reads content from a text file.
     
     Args:
-        video_path (str): Path to original video
-        target_languages (list): List of target languages
-        output_files (dict): Dictionary of output file paths
+        file_path (str): The path to the text file.
+        encoding (str, optional): The file encoding. Defaults to 'utf-8'.
         
     Returns:
-        dict: Processing summary
+        str: The file content, or an empty string if an error occurs.
+    """
+    try:
+        return Path(file_path).read_text(encoding=encoding)
+    except Exception as e:
+        logging.error(f"Error reading file {file_path}: {e}")
+        return ""
+
+def write_text_file(content: str, file_path: str, encoding: str = 'utf-8') -> bool:
+    """
+    Safely writes content to a text file, creating parent directories if needed.
+    
+    Args:
+        content (str): The content to write.
+        file_path (str): The path where the file will be saved.
+        encoding (str, optional): The file encoding. Defaults to 'utf-8'.
+        
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    try:
+        path = Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding=encoding)
+        return True
+    except Exception as e:
+        logging.error(f"Error writing file {file_path}: {e}")
+        return False
+
+def create_processing_summary(video_path: str, target_languages: List[str], output_files: Dict) -> Dict:
+    """
+    Creates a dictionary summarizing the results of a processing job.
+    
+    Args:
+        video_path (str): The path to the original video.
+        target_languages (List[str]): The list of target languages.
+        output_files (Dict): A dictionary of output files, categorized by type.
+        
+    Returns:
+        Dict: A structured summary of the processing results.
     """
     summary = {
         'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
         'original_video': {
             'path': video_path,
-            'filename': os.path.basename(video_path),
+            'filename': Path(video_path).name,
             'size_mb': get_file_size_mb(video_path)
         },
         'target_languages': target_languages,
         'output_files': {},
         'total_files_created': 0,
-        'total_output_size_mb': 0
+        'total_output_size_mb': 0.0
     }
     
     for file_type, files in output_files.items():
         summary['output_files'][file_type] = {}
-        for lang, file_path in files.items():
-            if os.path.exists(file_path):
-                file_size = get_file_size_mb(file_path)
+        for lang, path in files.items():
+            if Path(path).exists():
+                size = get_file_size_mb(path)
                 summary['output_files'][file_type][lang] = {
-                    'path': file_path,
-                    'filename': os.path.basename(file_path),
-                    'size_mb': file_size
+                    'path': path,
+                    'filename': Path(path).name,
+                    'size_mb': size
                 }
                 summary['total_files_created'] += 1
-                summary['total_output_size_mb'] += file_size
+                summary['total_output_size_mb'] += size
     
     return summary
 
-def save_processing_summary(summary, output_dir):
+def save_processing_summary(summary: Dict, output_dir: str) -> str:
     """
-    Save processing summary as JSON file
+    Saves a processing summary dictionary to a JSON file.
     
     Args:
-        summary (dict): Processing summary dictionary
-        output_dir (str): Directory to save the summary
+        summary (Dict): The summary dictionary.
+        output_dir (str): The directory to save the summary file in.
         
     Returns:
-        str: Path to the saved summary file
+        str: The path to the saved summary file, or None if saving fails.
     """
-    summary_file = os.path.join(output_dir, "processing_summary.json")
-    
+    summary_file = Path(output_dir) / "processing_summary.json"
     try:
         with open(summary_file, 'w', encoding='utf-8') as f:
-            json.dump(summary, f, indent=2, ensure_ascii=False)
-        return summary_file
+            json.dump(summary, f, indent=4, ensure_ascii=False)
+        logging.info(f"Processing summary saved to {summary_file}")
+        return str(summary_file)
     except Exception as e:
-        print(f"Could not save processing summary: {e}")
+        logging.error(f"Could not save processing summary: {e}")
         return None

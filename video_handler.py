@@ -1,318 +1,225 @@
-import os
-import subprocess
-import tempfile
-from pathlib import Path
 import json
+import logging
+import subprocess
+from pathlib import Path
+from typing import Dict, Any, Optional
 
-def get_video_info(video_path):
+# --- Configuration ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+def check_ffmpeg_tools() -> Dict[str, bool]:
     """
-    Get detailed video information using ffprobe
+    Checks for the availability of FFmpeg and FFprobe.
+
+    Returns:
+        Dict[str, bool]: A dictionary indicating the availability of each tool.
+    """
+    status = {'ffmpeg': False, 'ffprobe': False}
+    for tool in status:
+        try:
+            subprocess.run([tool, "-version"], capture_output=True, text=True, check=True)
+            status[tool] = True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            logging.warning(f"{tool.capitalize()} is not installed or not in PATH.")
+    return status
+
+FFMPEG_TOOLS_AVAILABLE = check_ffmpeg_tools()
+
+# --- Core Video Operations ---
+
+def get_video_info(video_path: str) -> Dict[str, Any]:
+    """
+    Retrieves detailed video information using ffprobe.
     
     Args:
-        video_path (str): Path to the video file
+        video_path (str): The path to the video file.
         
     Returns:
-        dict: Video information including duration, resolution, codec, etc.
+        Dict[str, Any]: A dictionary with video metadata.
+
+    Raises:
+        FileNotFoundError: If the video file is not found or ffprobe is unavailable.
+        Exception: For errors during ffprobe execution or JSON parsing.
     """
-    if not os.path.exists(video_path):
+    if not FFMPEG_TOOLS_AVAILABLE['ffprobe']:
+        raise FileNotFoundError("FFprobe is required to get video info but is not available.")
+    if not Path(video_path).exists():
         raise FileNotFoundError(f"Video file not found: {video_path}")
     
+    cmd = [
+        "ffprobe", "-v", "quiet", "-print_format", "json",
+        "-show_format", "-show_streams", video_path
+    ]
+
     try:
-        # Use ffprobe to get video information
-        cmd = [
-            "ffprobe",
-            "-v", "quiet",
-            "-print_format", "json",
-            "-show_format",
-            "-show_streams",
-            video_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
-        
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True)
         probe_data = json.loads(result.stdout)
         
-        # Extract video stream information
-        video_stream = None
-        audio_stream = None
+        # Extract primary video and audio streams
+        video_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'video'), None)
+        audio_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'audio'), None)
         
-        for stream in probe_data.get('streams', []):
-            if stream.get('codec_type') == 'video' and video_stream is None:
-                video_stream = stream
-            elif stream.get('codec_type') == 'audio' and audio_stream is None:
-                audio_stream = stream
-        
-        # Extract format information
         format_info = probe_data.get('format', {})
         
-        video_info = {
-            'filename': os.path.basename(video_path),
+        # Safely evaluate frame rate
+        fps_str = video_stream.get('r_frame_rate', '0/1') if video_stream else '0/1'
+        try:
+            num, den = map(int, fps_str.split('/'))
+            fps = num / den if den else 0
+        except (ValueError, ZeroDivisionError):
+            fps = 0
+
+        info = {
+            'filename': Path(video_path).name,
             'duration': float(format_info.get('duration', 0)),
             'size_bytes': int(format_info.get('size', 0)),
-            'format_name': format_info.get('format_name', 'unknown'),
-            'bit_rate': int(format_info.get('bit_rate', 0)) if format_info.get('bit_rate') else 0
+            'format_name': format_info.get('format_name'),
+            'bit_rate': int(format_info.get('bit_rate', 0)),
+            'width': video_stream.get('width', 0) if video_stream else 0,
+            'height': video_stream.get('height', 0) if video_stream else 0,
+            'video_codec': video_stream.get('codec_name') if video_stream else None,
+            'fps': fps,
+            'audio_codec': audio_stream.get('codec_name') if audio_stream else None,
+            'sample_rate': int(audio_stream.get('sample_rate', 0)) if audio_stream else 0,
+            'audio_channels': audio_stream.get('channels', 0) if audio_stream else 0
         }
-        
-        # Add video stream info if available
-        if video_stream:
-            video_info.update({
-                'width': video_stream.get('width', 0),
-                'height': video_stream.get('height', 0),
-                'video_codec': video_stream.get('codec_name', 'unknown'),
-                'fps': eval(video_stream.get('r_frame_rate', '0/1')) if video_stream.get('r_frame_rate') else 0,
-                'pixel_format': video_stream.get('pix_fmt', 'unknown')
-            })
-        
-        # Add audio stream info if available
-        if audio_stream:
-            video_info.update({
-                'audio_codec': audio_stream.get('codec_name', 'unknown'),
-                'sample_rate': int(audio_stream.get('sample_rate', 0)) if audio_stream.get('sample_rate') else 0,
-                'audio_channels': audio_stream.get('channels', 0)
-            })
-        
-        return video_info
+        return info
         
     except subprocess.CalledProcessError as e:
-        raise Exception(f"Failed to get video info: {e.stderr}")
-    except json.JSONDecodeError as e:
-        raise Exception(f"Failed to parse video info: {str(e)}")
+        raise Exception(f"ffprobe failed: {e.stderr}")
+    except json.JSONDecodeError:
+        raise Exception("Failed to parse ffprobe output.")
     except Exception as e:
-        raise Exception(f"Error getting video info: {str(e)}")
+        raise Exception(f"An unexpected error occurred while getting video info: {e}")
 
-def extract_audio_from_video(video_path, output_dir, audio_format="wav"):
+def extract_audio_from_video(video_path: str, output_dir: str, audio_format: str = "wav") -> str:
     """
-    Extract audio from video file
+    Extracts the audio track from a video file and saves it in the desired format.
     
     Args:
-        video_path (str): Path to the input video file
-        output_dir (str): Directory to save the extracted audio
-        audio_format (str): Output audio format (wav, mp3, m4a)
+        video_path (str): The path to the input video file.
+        output_dir (str): The directory to save the extracted audio.
+        audio_format (str, optional): The output audio format ('wav' or 'mp3'). Defaults to "wav".
         
     Returns:
-        str: Path to the extracted audio file
+        str: The path to the extracted audio file.
     """
-    if not os.path.exists(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-    
-    # Create output filename
-    video_name = Path(video_path).stem
-    audio_filename = f"{video_name}.{audio_format}"
-    audio_path = os.path.join(output_dir, audio_filename)
+    if not FFMPEG_TOOLS_AVAILABLE['ffmpeg']:
+        raise FileNotFoundError("FFmpeg is required to extract audio but is not available.")
+
+    video_p = Path(video_path)
+    output_audio_path = Path(output_dir) / f"{video_p.stem}.{audio_format}"
+
+    cmd = [
+        "ffmpeg", "-i", str(video_p),
+        "-vn",  # No video
+        "-acodec", "pcm_s16le" if audio_format == "wav" else "libmp3lame",
+        "-ac", "1",      # Mono audio
+        "-ar", "16000",  # 16kHz sample rate
+        "-y", str(output_audio_path)
+    ]
     
     try:
-        # Build ffmpeg command for audio extraction
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-vn",  # No video
-            "-acodec", "pcm_s16le" if audio_format == "wav" else "libmp3lame",
-            "-ac", "1",  # Mono audio (better for transcription)
-            "-ar", "16000",  # 16kHz sample rate (optimal for Whisper)
-            "-y",  # Overwrite output file
-            audio_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
-        
-        if not os.path.exists(audio_path):
-            raise FileNotFoundError("Audio extraction failed - output file not created")
-        
-        return audio_path
-        
+        subprocess.run(cmd, capture_output=True, text=True, timeout=600, check=True)
+        logging.info(f"Audio extracted successfully to: {output_audio_path}")
+        return str(output_audio_path)
     except subprocess.CalledProcessError as e:
         raise Exception(f"Audio extraction failed: {e.stderr}")
-    except Exception as e:
-        raise Exception(f"Error extracting audio: {str(e)}")
 
-def validate_video_file(video_path):
+# --- Utility Video Functions ---
+
+def validate_video_file(video_path: str) -> Dict[str, Any]:
     """
-    Validate video file format and basic properties
+    Performs a basic validation of a video file's properties.
     
     Args:
-        video_path (str): Path to the video file
+        video_path (str): The path to the video file.
         
     Returns:
-        dict: Validation results with status and messages
+        Dict[str, Any]: A dictionary with validation status, errors, and warnings.
     """
-    validation_result = {
-        'valid': False,
-        'errors': [],
-        'warnings': []
-    }
+    result = {'is_valid': False, 'errors': [], 'warnings': []}
     
-    # Check if file exists
-    if not os.path.exists(video_path):
-        validation_result['errors'].append("Video file does not exist")
-        return validation_result
-    
-    # Check file size (should be reasonable)
-    file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-    if file_size_mb > 500:  # 500MB limit
-        validation_result['warnings'].append(f"Large file size: {file_size_mb:.1f}MB")
-    elif file_size_mb < 0.1:  # Less than 100KB
-        validation_result['errors'].append("File too small to be a valid video")
-        return validation_result
-    
-    # Check file extension
-    valid_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.m4v']
-    file_ext = Path(video_path).suffix.lower()
-    if file_ext not in valid_extensions:
-        validation_result['warnings'].append(f"Uncommon video format: {file_ext}")
+    if not Path(video_path).exists():
+        result['errors'].append("Video file does not exist.")
+        return result
     
     try:
-        # Try to get video info using ffprobe
-        video_info = get_video_info(video_path)
-        
-        # Check duration
-        duration = video_info.get('duration', 0)
-        if duration <= 0:
-            validation_result['errors'].append("Invalid or zero duration")
-        elif duration > 3600:  # More than 1 hour
-            validation_result['warnings'].append(f"Long video: {duration/60:.1f} minutes")
-        
-        # Check resolution
-        width = video_info.get('width', 0)
-        height = video_info.get('height', 0)
-        if width <= 0 or height <= 0:
-            validation_result['errors'].append("Invalid video resolution")
-        
-        # Check if video has audio (required for transcription)
-        if 'audio_codec' not in video_info or video_info['audio_codec'] == 'unknown':
-            validation_result['errors'].append("No audio track found - required for transcription")
-        
-        if not validation_result['errors']:
-            validation_result['valid'] = True
-        
-    except Exception as e:
-        validation_result['errors'].append(f"Cannot read video file: {str(e)}")
-    
-    return validation_result
+        info = get_video_info(video_path)
+        if not info.get('duration') or info['duration'] <= 0:
+            result['errors'].append("Video has zero or invalid duration.")
+        if not info.get('width') or info['width'] <= 0:
+            result['errors'].append("Video has invalid resolution.")
+        if not info.get('audio_codec'):
+            result['errors'].append("No audio track found, which is required for transcription.")
 
-def create_video_thumbnail(video_path, output_dir, timestamp="00:00:10"):
+        if not result['errors']:
+            result['is_valid'] = True
+
+    except Exception as e:
+        result['errors'].append(f"Cannot read video file metadata: {e}")
+    
+    return result
+
+def create_video_thumbnail(video_path: str, output_dir: str, timestamp: str = "00:00:10") -> Optional[str]:
     """
-    Create a thumbnail image from video at specified timestamp
+    Creates a thumbnail image from a video at a specific timestamp.
     
     Args:
-        video_path (str): Path to the video file
-        output_dir (str): Directory to save the thumbnail
-        timestamp (str): Timestamp in format HH:MM:SS
+        video_path (str): The path to the video file.
+        output_dir (str): The directory to save the thumbnail.
+        timestamp (str, optional): The timestamp for the thumbnail (HH:MM:SS). Defaults to "00:00:10".
         
     Returns:
-        str: Path to the created thumbnail file
+        Optional[str]: The path to the thumbnail, or None if creation fails.
     """
-    if not os.path.exists(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-    
-    video_name = Path(video_path).stem
-    thumbnail_path = os.path.join(output_dir, f"{video_name}_thumbnail.jpg")
+    if not FFMPEG_TOOLS_AVAILABLE['ffmpeg']:
+        logging.error("FFmpeg is required to create thumbnails.")
+        return None
+
+    thumb_path = Path(output_dir) / f"{Path(video_path).stem}_thumbnail.jpg"
+    cmd = ["ffmpeg", "-i", video_path, "-ss", timestamp, "-vframes", "1", "-q:v", "2", "-y", str(thumb_path)]
     
     try:
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-ss", timestamp,
-            "-vframes", "1",
-            "-q:v", "2",  # High quality
-            "-y",
-            thumbnail_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
-        
-        return thumbnail_path
-        
-    except Exception as e:
-        raise Exception(f"Thumbnail creation failed: {str(e)}")
+        subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=True)
+        return str(thumb_path)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Thumbnail creation failed: {e.stderr}")
+        return None
 
-def compress_video(video_path, output_dir, quality="medium"):
+def compress_video(video_path: str, output_dir: str, quality: str = "medium") -> Optional[str]:
     """
-    Compress video to reduce file size
+    Compresses a video to reduce its file size.
     
     Args:
-        video_path (str): Path to input video
-        output_dir (str): Directory to save compressed video
-        quality (str): Compression quality ("low", "medium", "high")
+        video_path (str): The path to the input video.
+        output_dir (str): The directory to save the compressed video.
+        quality (str, optional): Compression quality ('low', 'medium', 'high'). Defaults to "medium".
         
     Returns:
-        str: Path to compressed video
+        Optional[str]: The path to the compressed video, or None if compression fails.
     """
-    if not os.path.exists(video_path):
-        raise FileNotFoundError(f"Video file not found: {video_path}")
-    
-    video_name = Path(video_path).stem
-    compressed_path = os.path.join(output_dir, f"{video_name}_compressed.mp4")
-    
-    # Quality presets
-    quality_settings = {
+    if not FFMPEG_TOOLS_AVAILABLE['ffmpeg']:
+        logging.error("FFmpeg is required for video compression.")
+        return None
+
+    settings = {
         "low": {"crf": "28", "preset": "fast"},
         "medium": {"crf": "23", "preset": "medium"},
         "high": {"crf": "18", "preset": "slow"}
-    }
+    }.get(quality, {"crf": "23", "preset": "medium"})
     
-    settings = quality_settings.get(quality, quality_settings["medium"])
+    compressed_path = Path(output_dir) / f"{Path(video_path).stem}_compressed.mp4"
+    cmd = [
+        "ffmpeg", "-i", video_path,
+        "-c:v", "libx264", "-crf", settings["crf"], "-preset", settings["preset"],
+        "-c:a", "aac", "-b:a", "128k",
+        "-y", str(compressed_path)
+    ]
     
     try:
-        cmd = [
-            "ffmpeg",
-            "-i", video_path,
-            "-c:v", "libx264",
-            "-crf", settings["crf"],
-            "-preset", settings["preset"],
-            "-c:a", "aac",
-            "-b:a", "128k",
-            "-y",
-            compressed_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(result.returncode, cmd, result.stderr)
-        
-        return compressed_path
-        
-    except Exception as e:
-        raise Exception(f"Video compression failed: {str(e)}")
-
-def check_ffmpeg_installation():
-    """
-    Check if FFmpeg and FFprobe are properly installed
-    
-    Returns:
-        dict: Status of FFmpeg tools installation
-    """
-    tools_status = {
-        'ffmpeg': False,
-        'ffprobe': False,
-        'all_available': False
-    }
-    
-    # Check ffmpeg
-    try:
-        result = subprocess.run(["ffmpeg", "-version"], 
-                              capture_output=True, text=True, timeout=10)
-        tools_status['ffmpeg'] = result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        tools_status['ffmpeg'] = False
-    
-    # Check ffprobe
-    try:
-        result = subprocess.run(["ffprobe", "-version"], 
-                              capture_output=True, text=True, timeout=10)
-        tools_status['ffprobe'] = result.returncode == 0
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        tools_status['ffprobe'] = False
-    
-    tools_status['all_available'] = tools_status['ffmpeg'] and tools_status['ffprobe']
-    
-    return tools_status
+        subprocess.run(cmd, capture_output=True, text=True, timeout=1800, check=True)
+        return str(compressed_path)
+    except subprocess.CalledProcessError as e:
+        logging.error(f"Video compression failed: {e.stderr}")
+        return None

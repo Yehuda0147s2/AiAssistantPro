@@ -1,106 +1,96 @@
-import os
-import requests
 import re
-from pathlib import Path
 import time
+import logging
+from pathlib import Path
+from typing import Dict, List, Any
+import requests
 
-# Language mapping for LibreTranslate
-LANGUAGE_MAP = {
-    "Hebrew": "he",
-    "Spanish": "es", 
-    "French": "fr",
-    "German": "de",
-    "Italian": "it",
-    "Portuguese": "pt",
-    "Arabic": "ar",
-    "Russian": "ru",
-    "Chinese": "zh",
-    "Japanese": "ja"
+# --- Configuration ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Using a session for connection pooling and performance
+SESSION = requests.Session()
+
+# Language mapping for translation services
+LANGUAGE_MAP: Dict[str, str] = {
+    "Hebrew": "he", "Spanish": "es", "French": "fr", "German": "de",
+    "Italian": "it", "Portuguese": "pt", "Arabic": "ar", "Russian": "ru",
+    "Chinese": "zh", "Japanese": "ja", "Korean": "ko", "Dutch": "nl"
 }
 
-def translate_text_libretranslate(text, target_lang, source_lang="en"):
+def translate_text_libretranslate(text: str, target_lang: str, source_lang: str = "en") -> str:
     """
-    Translate text using LibreTranslate API
+    Translates text using the public LibreTranslate API.
     
     Args:
-        text (str): Text to translate
-        target_lang (str): Target language code
-        source_lang (str): Source language code (default: en)
+        text (str): The text to be translated.
+        target_lang (str): The target language code (e.g., 'es', 'fr').
+        source_lang (str, optional): The source language code. Defaults to "en".
     
     Returns:
-        str: Translated text
+        str: The translated text, or the original text if translation fails.
     """
-    # Use public LibreTranslate instance
     url = "https://libretranslate.de/translate"
-    
-    payload = {
-        "q": text,
-        "source": source_lang,
-        "target": target_lang,
-        "format": "text"
-    }
+    payload = {"q": text, "source": source_lang, "target": target_lang, "format": "text"}
     
     try:
-        response = requests.post(url, data=payload, timeout=30)
+        response = SESSION.post(url, data=payload, timeout=30)
         response.raise_for_status()
-        
         result = response.json()
         return result.get("translatedText", text)
         
     except requests.exceptions.RequestException as e:
-        # Fallback to a different service or return original text
-        print(f"LibreTranslate failed: {e}")
+        logging.warning(f"LibreTranslate API failed: {e}. Attempting fallback.")
         return translate_text_fallback(text, target_lang, source_lang)
     except Exception as e:
-        print(f"Translation error: {e}")
+        logging.error(f"An unexpected error occurred with LibreTranslate: {e}")
         return text
 
-def translate_text_fallback(text, target_lang, source_lang="en"):
+def translate_text_fallback(text: str, target_lang: str, source_lang: str = "en") -> str:
     """
-    Fallback translation using alternative service
+    A fallback translation function using the MyMemory API.
     
     Args:
-        text (str): Text to translate
-        target_lang (str): Target language code
-        source_lang (str): Source language code
+        text (str): The text to be translated.
+        target_lang (str): The target language code.
+        source_lang (str, optional): The source language code. Defaults to "en".
     
     Returns:
-        str: Translated text or original if failed
+        str: The translated text, or the original if all attempts fail.
     """
+    url = "https://api.mymemory.translated.net/get"
+    params = {"q": text[:499], "langpair": f"{source_lang}|{target_lang}"}
+
     try:
-        # Alternative: MyMemory API (free tier)
-        url = f"https://api.mymemory.translated.net/get"
-        params = {
-            "q": text[:500],  # Limit text length
-            "langpair": f"{source_lang}|{target_lang}"
-        }
-        
-        response = requests.get(url, params=params, timeout=15)
+        response = SESSION.get(url, params=params, timeout=15)
         response.raise_for_status()
-        
         result = response.json()
         if result.get("responseStatus") == 200:
             return result["responseData"]["translatedText"]
-        
+        logging.warning(f"Fallback translation failed with status: {result.get('responseStatus')}")
     except Exception as e:
-        print(f"Fallback translation failed: {e}")
+        logging.error(f"Fallback translation API failed: {e}")
     
-    return text  # Return original text if all translation attempts fail
+    return text
 
-def parse_srt_file(srt_path):
+def parse_srt_file(srt_path: str) -> List[Dict[str, Any]]:
     """
-    Parse SRT file and extract subtitle entries
+    Parses an SRT file and extracts subtitle entries into a list of dictionaries.
     
     Args:
-        srt_path (str): Path to the SRT file
+        srt_path (str): The path to the SRT file.
     
     Returns:
-        list: List of subtitle entries with index, timestamp, and text
+        List[Dict[str, Any]]: A list of subtitle entries.
     """
+    if not Path(srt_path).exists():
+        logging.error(f"SRT file not found at: {srt_path}")
+        return []
+
     with open(srt_path, 'r', encoding='utf-8') as file:
         content = file.read()
     
-    # Split content into subtitle blocks
+    # Regex to split SRT file into blocks of index, timestamp, and text
     blocks = re.split(r'\n\s*\n', content.strip())
     subtitles = []
     
@@ -108,131 +98,111 @@ def parse_srt_file(srt_path):
         lines = block.strip().split('\n')
         if len(lines) >= 3:
             try:
-                index = int(lines[0])
-                timestamp = lines[1]
-                text = '\n'.join(lines[2:])
-                
                 subtitles.append({
-                    'index': index,
-                    'timestamp': timestamp,
-                    'text': text
+                    'index': int(lines[0]),
+                    'timestamp': lines[1],
+                    'text': '\n'.join(lines[2:])
                 })
-            except (ValueError, IndexError):
-                continue
-    
+            except (ValueError, IndexError) as e:
+                logging.warning(f"Skipping malformed SRT block: {block} | Error: {e}")
     return subtitles
 
-def create_translated_srt(subtitles, output_path):
+def create_translated_srt(subtitles: List[Dict[str, Any]], output_path: str) -> str:
     """
-    Create SRT file from translated subtitles
+    Creates a new SRT file from a list of translated subtitle entries.
     
     Args:
-        subtitles (list): List of subtitle entries
-        output_path (str): Path to save the translated SRT file
+        subtitles (List[Dict[str, Any]]): The list of subtitle entries.
+        output_path (str): The path to save the new SRT file.
     
     Returns:
-        str: Path to the created SRT file
+        str: The path to the created SRT file.
     """
     with open(output_path, 'w', encoding='utf-8') as file:
-        for subtitle in subtitles:
-            file.write(f"{subtitle['index']}\n")
-            file.write(f"{subtitle['timestamp']}\n")
-            file.write(f"{subtitle['text']}\n\n")
-    
+        for sub in subtitles:
+            file.write(f"{sub['index']}\n")
+            file.write(f"{sub['timestamp']}\n")
+            file.write(f"{sub['text']}\n\n")
     return output_path
 
-def translate_srt(srt_path, target_language, output_dir):
+def translate_srt(srt_path: str, target_language: str, output_dir: str) -> str:
     """
-    Translate an entire SRT file to target language
+    Translates an entire SRT file to a specified target language.
     
     Args:
-        srt_path (str): Path to the source SRT file
-        target_language (str): Target language name (e.g., "Hebrew", "Spanish")
-        output_dir (str): Directory to save the translated SRT file
+        srt_path (str): The path to the source SRT file.
+        target_language (str): The target language name (e.g., "Spanish").
+        output_dir (str): The directory to save the translated SRT file.
     
     Returns:
-        str: Path to the translated SRT file
+        str: The path to the translated SRT file.
+
+    Raises:
+        ValueError: If the target language is not supported or subtitles cannot be parsed.
     """
     if target_language not in LANGUAGE_MAP:
-        raise ValueError(f"Unsupported language: {target_language}")
+        raise ValueError(f"Unsupported language: '{target_language}'.")
     
     target_lang_code = LANGUAGE_MAP[target_language]
-    
-    # Parse original SRT file
     subtitles = parse_srt_file(srt_path)
     
     if not subtitles:
-        raise ValueError("No subtitles found in SRT file")
+        raise ValueError("No valid subtitles found in the provided SRT file.")
     
-    # Translate each subtitle
     translated_subtitles = []
+    total_subs = len(subtitles)
     
-    for subtitle in subtitles:
-        # Clean text for translation (remove formatting)
-        clean_text = re.sub(r'<[^>]+>', '', subtitle['text'])
-        clean_text = clean_text.strip()
+    for i, sub in enumerate(subtitles):
+        clean_text = re.sub(r'<[^>]+>', '', sub['text']).strip()
         
         if clean_text:
-            # Translate the text
-            translated_text = translate_text_libretranslate(
-                clean_text, 
-                target_lang_code, 
-                "en"
-            )
-            
-            # Add small delay to avoid rate limiting
-            time.sleep(0.1)
+            logging.info(f"Translating subtitle {i+1}/{total_subs} to {target_language}...")
+            translated_text = translate_text_libretranslate(clean_text, target_lang_code)
+            time.sleep(0.1)  # Small delay to avoid rate-limiting
         else:
-            translated_text = subtitle['text']
+            translated_text = sub['text']
         
-        translated_subtitles.append({
-            'index': subtitle['index'],
-            'timestamp': subtitle['timestamp'],
-            'text': translated_text
-        })
+        translated_subtitles.append({**sub, 'text': translated_text})
     
-    # Create output filename
+    # Construct the output path and save the new SRT file
     base_name = Path(srt_path).stem
     output_filename = f"{base_name}_{target_language.lower()}.srt"
-    output_path = os.path.join(output_dir, output_filename)
+    output_path = Path(output_dir) / output_filename
     
-    # Save translated SRT file
-    return create_translated_srt(translated_subtitles, output_path)
+    return create_translated_srt(translated_subtitles, str(output_path))
 
-def batch_translate_srt(srt_path, target_languages, output_dir):
+def batch_translate_srt(srt_path: str, target_languages: List[str], output_dir: str) -> Dict[str, str]:
     """
-    Translate SRT file to multiple target languages
+    Translates an SRT file into multiple target languages.
     
     Args:
-        srt_path (str): Path to the source SRT file
-        target_languages (list): List of target language names
-        output_dir (str): Directory to save translated SRT files
+        srt_path (str): The path to the source SRT file.
+        target_languages (List[str]): A list of target language names.
+        output_dir (str): The directory to save the translated files.
     
     Returns:
-        dict: Dictionary mapping language names to translated SRT file paths
+        Dict[str, str]: A dictionary mapping language names to their SRT file paths.
     """
     translated_files = {}
-    
-    for language in target_languages:
+    for lang in target_languages:
         try:
-            translated_file = translate_srt(srt_path, language, output_dir)
-            translated_files[language] = translated_file
+            translated_path = translate_srt(srt_path, lang, output_dir)
+            translated_files[lang] = translated_path
+            logging.info(f"Successfully translated to {lang}: {translated_path}")
         except Exception as e:
-            print(f"Failed to translate to {language}: {e}")
-            continue
-    
+            logging.error(f"Failed to translate SRT to {lang}: {e}")
     return translated_files
 
-def validate_translation_service():
+def validate_translation_service() -> bool:
     """
-    Validate that translation service is accessible
+    Validates that the primary translation service is accessible and working.
     
     Returns:
-        bool: True if service is accessible, False otherwise
+        bool: True if the service is accessible, False otherwise.
     """
     try:
-        test_text = "Hello"
-        translated = translate_text_libretranslate(test_text, "es", "en")
-        return translated != test_text  # Should be different if translation worked
+        test_text = "Hello, world"
+        translated = translate_text_libretranslate(test_text, "es")
+        return translated.lower() == "hola, mundo"
     except Exception:
         return False
