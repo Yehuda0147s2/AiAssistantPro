@@ -1,0 +1,9 @@
+.theme-amoled {
+    --bg-primary: #000000;
+    --bg-secondary: #0a0a0a;
+    --bg-tertiary: #151515;
+    --text-primary: #ffffff;
+    --text-secondary: #e0e0e0;
+    --text-tertiary: #909090;
+    --border-color: #222222;
+}
