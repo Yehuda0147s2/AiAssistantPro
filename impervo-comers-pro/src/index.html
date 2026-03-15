@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Impervo Comers Pro</title>
+    <meta name="description" content="Enterprise account sharing for Samsung devices">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#0b6ef0">
+    <link rel="apple-touch-icon" href="assets/icons/app-icon.svg">
+</head>
+<body class="theme-light">
+    <div id="app">
+        <header class="app-bar">
+            <div class="app-bar-content">
+                <button id="menu-toggle" class="icon-button">Menu</button>
+                <h1 id="page-title">Impervo</h1>
+                <div class="header-actions">
+                    <button id="theme-toggle" class="icon-button">Sun</button>
+                    <button id="notifications-toggle" class="icon-button">Bell</button>
+                </div>
+            </div>
+        </header>
+
+        <main id="main-content">
+            <div id="loader" class="shimmer-container">
+                <div class="shimmer-card"></div>
+            </div>
+        </main>
+
+        <nav class="bottom-navigation">
+            <a href="#feed" class="nav-item active" data-nav="feed">
+                <span>Feed</span>
+            </a>
+            <a href="#file-manager" class="nav-item" data-nav="file-manager">
+                <span>Files</span>
+            </a>
+            <a href="#device-scanner" class="nav-item" data-nav="device-scanner">
+                <span>Scanner</span>
+            </a>
+            <a href="#sharing" class="nav-item" data-nav="sharing">
+                <span>Share</span>
+            </a>
+            <a href="#settings" class="nav-item" data-nav="settings">
+                <span>Settings</span>
+            </a>
+        </nav>
+
+        <div id="toast-container"></div>
+        <div id="modal-container"></div>
+        <aside id="side-drawer" class="drawer"></aside>
+    </div>
+</body>
+</html>

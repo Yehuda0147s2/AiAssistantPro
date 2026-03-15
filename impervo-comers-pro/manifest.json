@@ -1,0 +1,19 @@
+{
+  "name": "Impervo Comers Pro",
+  "short_name": "Impervo",
+  "description": "Enterprise account sharing for Samsung",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0b6ef0",
+  "theme_color": "#0b6ef0",
+  "orientation": "portrait",
+  "categories": ["productivity", "communication"],
+  "icons": [
+    {
+      "src": "assets/icons/app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
